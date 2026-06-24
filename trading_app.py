@@ -31,10 +31,74 @@ STATIC_BASE_PRICES = {
 
 # 2. إدارة الذاكرة المستقرة لحفظ الحساب والمحفظة
 if "market_data" not in st.session_state: st.session_state.market_data = {}
+if "trend_state" not in st.session_state: st.session_state.trend_state = {}
 if "last_asset" not in st.session_state: st.session_state.last_asset = "⚡ Bitcoin (BTC/USD)"
 if "balance" not in st.session_state: st.session_state.balance = 10000.0
 if "holdings" not in st.session_state: st.session_state.holdings = {}
 if "history" not in st.session_state: st.session_state.history = []
+
+# دالة لتهيئة حالة الاتجاه الزمني لكل أصل مالي
+def initialize_trend_state(asset_name):
+    """تهيئة نظام الاتجاه الزمني لكل أصل"""
+    if asset_name not in st.session_state.trend_state:
+        st.session_state.trend_state[asset_name] = {
+            "phase": "bullish",  # bullish -> consolidation -> bearish
+            "cycle_count": 0,
+            "phase_duration": 3  # عدد التحديثات في كل مرحلة
+        }
+
+# دالة حساب السعر الجديد بناءً على الاتجاه الزمني
+def calculate_temporal_trend_price(asset_name, last_price, base_price, is_bitcoin=False):
+    """
+    حساب السعر الجديد بناءً على نمط الاتجاه الزمني
+    - Bullish: صعود مستمر لمدة 3 تحديثات
+    - Consolidation: استقرار جانبي مع تذبذب بسيط
+    - Bearish: هبوط مستمر لمدة 3 تحديثات
+    """
+    trend_info = st.session_state.trend_state[asset_name]
+    phase = trend_info["phase"]
+    cycle_count = trend_info["cycle_count"]
+    
+    # تحديد نطاق الحركة السعرية بناءً على المرحلة
+    if is_bitcoin:
+        if phase == "bullish":
+            price_change = random.uniform(10.0, 80.0)  # صعود قوي
+        elif phase == "consolidation":
+            price_change = random.uniform(-15.0, 15.0)  # تذبذب طفيف
+        else:  # bearish
+            price_change = random.uniform(-80.0, -10.0)  # هبوط قوي
+        rounding_factor = 1.0
+    else:
+        if phase == "bullish":
+            price_change = random.uniform(0.5, 7.5)  # صعود قوي
+        elif phase == "consolidation":
+            price_change = random.uniform(-1.5, 1.5)  # تذبذب طفيف
+        else:  # bearish
+            price_change = random.uniform(-7.5, -0.5)  # هبوط قوي
+        rounding_factor = 0.01
+    
+    # حساب السعر الجديد
+    next_price = last_price + price_change
+    
+    # حدود أمان لحماية السعر من الطيران اللانهائي أو الهبوط الكامل
+    next_price = max(base_price * 0.75, min(base_price * 1.25, next_price))
+    next_price = round(next_price / rounding_factor) * rounding_factor
+    
+    # تحديث عداد المرحلة
+    trend_info["cycle_count"] += 1
+    
+    # الانتقال إلى المرحلة التالية عند اكتمال المدة
+    if trend_info["cycle_count"] >= trend_info["phase_duration"]:
+        trend_info["cycle_count"] = 0
+        # دوران المراحل: bullish -> consolidation -> bearish -> bullish
+        if phase == "bullish":
+            trend_info["phase"] = "consolidation"
+        elif phase == "consolidation":
+            trend_info["phase"] = "bearish"
+        else:
+            trend_info["phase"] = "bullish"
+    
+    return next_price
 
 # قائمة اختيار الأسهم الفخمة
 selected_asset = st.selectbox(
@@ -47,54 +111,48 @@ selected_asset = st.selectbox(
 if selected_asset != st.session_state.last_asset:
     st.session_state.last_asset = selected_asset
 
-# توليد الشموع الـ 25 الأولى لأول مرة بنسب تذبذب متناسقة مع التعديل الجديد
+# توليد الشموع الـ 25 الأولى لأول مرة مع تطبيق نمط الاتجاهات الزمنية
 if selected_asset not in st.session_state.market_data:
+    initialize_trend_state(selected_asset)
     base_p = STATIC_BASE_PRICES[selected_asset]
-    volatility_range = 0.02 if "Bitcoin" in selected_asset else 0.04
-    rounding_factor = 1.0 if "Bitcoin" in selected_asset else 0.01
+    is_btc = "Bitcoin" in selected_asset
     
     candles_init = []
     p = base_p
     for _ in range(25):
         op = p
-        cl = op * (1 + random.uniform(-volatility_range, volatility_range))
-        cl = round(cl / rounding_factor) * rounding_factor
+        # استخدام نظام الاتجاه الزمني بدلاً من الحركة العشوائية البسيطة
+        cl = calculate_temporal_trend_price(selected_asset, p, base_p, is_bitcoin=is_btc)
+        
         hi = max(op, cl) * random.uniform(1.001, 1.004)
         lo = min(op, cl) * random.uniform(0.996, 0.999)
         candles_init.append({"open": op, "high": hi, "low": lo, "close": cl})
         p = cl
     st.session_state.market_data[selected_asset] = candles_init
+else:
+    # تهيئة حالة الاتجاه إذا لم تكن موجودة (للأصول الموجودة مسبقاً)
+    initialize_trend_state(selected_asset)
 
 # 🔥 محرك التحديث التلقائي الذكي (تحديث كل 1 ثانية أوتوماتيك بدون وميض للشاشة)
 st_autorefresh(interval=1000, key="datarefresh")
 
-# تشغيل الحسابات الحية لحركة السهم الحالية
+# تشغيل الحسابات الحية لحركة السهم الحالية مع نظام الاتجاهات الزمنية
 current_candles = st.session_state.market_data[selected_asset]
 last_candle = current_candles[-1]
 last_p = last_candle["close"]
 
 base_ref = STATIC_BASE_PRICES[selected_asset]
+is_btc = "Bitcoin" in selected_asset
 
-# 💎 الحركة المتوازنة (مبالغ محترمة وفي النص بالظبط) 💎
-if "Bitcoin" in selected_asset:
-    # قفزات البيتكوين بقت بين 20$ لـ 80$ في الثانية
-    price_change_dollars = random.uniform(-80.0, 85.0) 
-    rounding_factor = 1.0
-else:
-    # قفزات الأسهم بقت بين 2$ لـ 7$ في الثانية عشان المكسب يبان من غير شطحات خيالية
-    price_change_dollars = random.uniform(-7.0, 7.5)
-    rounding_factor = 0.01
-
+# 💎 نظام الاتجاهات الزمنية المحسّن (Temporal Trends) 💎
+# الحركة السعرية الآن تتبع نمطاً واقعياً بدلاً من التذبذب العشوائي البسيط
 next_open = last_p
-next_close = last_p + price_change_dollars
+next_close = calculate_temporal_trend_price(selected_asset, last_p, base_ref, is_bitcoin=is_btc)
 
-# حدود أمان لحماية السعر من الطيران اللانهائي أو الهبوط للصفر
-next_close = max(base_ref * 0.80, min(base_ref * 1.20, next_close))
-next_close = round(next_close / rounding_factor) * rounding_factor
-
-# حساب أعلى وأقل سعر للشمعة الجديدة بمدى ممتاز ومتناسق
-next_high = max(next_open, next_close) + abs(price_change_dollars * random.uniform(0.1, 0.2))
-next_low = min(next_open, next_close) - abs(price_change_dollars * random.uniform(0.1, 0.2))
+# حساب أعلى وأقل سعر للشمعة الجديدة بناءً على الاختلاف الفعلي
+price_move = abs(next_close - next_open)
+next_high = max(next_open, next_close) + (price_move * random.uniform(0.1, 0.25))
+next_low = min(next_open, next_close) - (price_move * random.uniform(0.1, 0.25))
 
 # ترحيل الشموع (نشيل أقدم واحدة ونحط الجديدة في الآخر عشان السهم يندفع للأمام)
 current_candles.pop(0)
